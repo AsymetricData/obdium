@@ -202,10 +202,7 @@ impl OBD {
             return Ok(());
         }
 
-        self.connection = serialport::new(port, baud_rate)
-            .timeout(Duration::from_secs(1))
-            .open()
-            .ok();
+        self.connection = Self::open_transport(port, baud_rate);
 
         if self.is_connected() {
             let initialized = self.init();
@@ -327,13 +324,40 @@ impl OBD {
             })
             .collect();
 
-        let open_serial_ports: Vec<(String, u32)> = handles
+        #[allow(unused_mut)]
+        let mut open_serial_ports: Vec<(String, u32)> = handles
             .into_iter()
             .filter_map(|h| h.join().ok().flatten())
             .collect();
 
+        // Bluetooth Classic adapters are not serial devices, so they cannot be
+        // probed like the ports above. They are listed as `BT:<MAC>` and opened
+        // over RFCOMM in `open_transport`.
+        #[cfg(target_os = "linux")]
+        for device in crate::bluetooth::list_devices() {
+            println!("Bluetooth adapter: {} ({})", device.name, device.address);
+            open_serial_ports.push((device.port_name(), 38400));
+        }
+
         println!("Ports: {:?}", open_serial_ports);
         open_serial_ports
+    }
+
+    /// Open either a real serial port or an RFCOMM connection to a Bluetooth
+    /// Classic adapter, depending on the selected port name.
+    fn open_transport(port: &str, baud_rate: u32) -> Option<Box<dyn SerialPort>> {
+        #[cfg(target_os = "linux")]
+        if crate::bluetooth::is_bluetooth_port(port) {
+            return crate::bluetooth::connect(port, baud_rate)
+                .map(|stream| Box::new(stream) as Box<dyn SerialPort>)
+                .map_err(|error| println!("Bluetooth connection failed: {error}"))
+                .ok();
+        }
+
+        serialport::new(port, baud_rate)
+            .timeout(Duration::from_secs(1))
+            .open()
+            .ok()
     }
 
     pub fn init(&mut self) -> Result<(), Error> {

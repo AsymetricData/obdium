@@ -1,3 +1,4 @@
+pub mod bluetooth;
 mod cmd;
 pub mod dicts;
 pub mod mid;

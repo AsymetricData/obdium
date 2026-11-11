@@ -91,6 +91,16 @@ For a full user manual, view the docs [here.](https://provrb.github.io/obdium/)
    - Optionally change or leave the `OBD-II Protocol` and `Baud Rate` settings as is
 5. Click **Connect** and wait for the notification telling you the connection was established
 
+### Bluetooth Classic (SPP) adapters (Linux)
+
+Bluetooth Classic adapters that expose a Serial Port Profile show up directly in the port list as `BT:AA:BB:CC:DD:EE:FF` — no `rfcomm bind`, no root, no extra tools:
+
+1. Pair the adapter with your OS (Bluetooth settings or `bluetoothctl`).
+2. Open the **Connection** panel and click refresh.
+3. Select the `BT:<MAC>` entry and connect. The RFCOMM channel is detected automatically.
+
+Only adapters advertising the SPP service UUID (`00001101-...`) are listed. BLE-only (GATT) adapters are not supported yet, and on macOS/Windows Classic adapters still have to be exposed as a regular serial device by the OS.
+
 ### Understanding each feature
 
 - OBD data will be recorded in the **OBD Dashboard**

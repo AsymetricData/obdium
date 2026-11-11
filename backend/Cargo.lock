@@ -1952,6 +1952,7 @@ version = "1.5.0"
 dependencies = [
  "chrono",
  "evalexpr",
+ "libc",
  "num_enum",
  "once_cell",
  "rand",
