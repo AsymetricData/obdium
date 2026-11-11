@@ -14,11 +14,12 @@
 
 #![cfg(target_os = "linux")]
 
+use serde::Serialize;
 use serialport::SerialPort;
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
-use std::os::unix::io::RawFd;
-use std::process::Command;
+use std::os::unix::io::{FromRawFd, RawFd};
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -103,7 +104,11 @@ pub fn list_devices() -> Vec<BluetoothDevice> {
     let mut devices = Vec::new();
 
     for (address, name) in candidates {
-        let info = match Command::new("bluetoothctl").arg("info").arg(&address).output() {
+        let info = match Command::new("bluetoothctl")
+            .arg("info")
+            .arg(&address)
+            .output()
+        {
             Ok(output) if output.status.success() => {
                 String::from_utf8_lossy(&output.stdout).into_owned()
             }
@@ -138,6 +143,371 @@ fn has_spp_service(info: &str) -> bool {
         let line = line.to_ascii_lowercase();
         line.contains(SPP_UUID) || line.contains("serial port")
     })
+}
+
+/// A Bluetooth device as shown in the in-app adapter list.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AdapterInfo {
+    pub address: String,
+    pub name: String,
+    pub paired: bool,
+    /// Whether the device was confirmed to expose the Serial Port Profile.
+    pub spp: bool,
+    /// True for devices the app can use (`BT:<address>` as the port name).
+    pub usable: bool,
+}
+
+/// Whether BlueZ is reachable from this machine.
+pub fn is_available() -> bool {
+    Command::new("bluetoothctl")
+        .arg("show")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+/// Discover nearby and already-paired devices.
+///
+/// Bluetooth Classic adapters advertise SPP; BLE-only devices are hidden when
+/// their service list is known. Devices whose services could not be resolved
+/// yet are kept so a freshly powered adapter is still selectable.
+pub fn scan(duration: Duration) -> Vec<AdapterInfo> {
+    let seconds = duration.as_secs().clamp(1, 30).to_string();
+    let discovered = Command::new("bluetoothctl")
+        .args(["--timeout", &seconds, "scan", "on"])
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_default();
+
+    let known = Command::new("bluetoothctl")
+        .arg("devices")
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_default();
+
+    let mut candidates = parse_device_list(&known);
+    for device in parse_device_list(&discovered) {
+        if !candidates.iter().any(|(address, _)| address == &device.0) {
+            candidates.push(device);
+        }
+    }
+
+    let mut adapters = Vec::new();
+    for (address, name) in candidates.into_iter().take(32) {
+        let info = match Command::new("bluetoothctl")
+            .arg("info")
+            .arg(&address)
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).into_owned()
+            }
+            _ => continue,
+        };
+
+        let paired = info.lines().any(|line| line.trim() == "Paired: yes");
+        let spp = has_spp_service(&info);
+        let has_services = info
+            .lines()
+            .any(|line| line.trim_start().starts_with("UUID:"));
+
+        if !spp && has_services {
+            // Known service list without SPP: BLE or another profile we cannot use.
+            continue;
+        }
+
+        adapters.push(AdapterInfo {
+            address,
+            name: if name.is_empty() {
+                "Unknown device".to_string()
+            } else {
+                name
+            },
+            paired,
+            spp,
+            usable: spp || !has_services,
+        });
+    }
+
+    adapters.sort_by(|left, right| {
+        right
+            .paired
+            .cmp(&left.paired)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+
+    adapters
+}
+
+/// Pair an adapter, then mark it trusted so it reconnects without prompts.
+///
+/// Cheap ELM327 clones either pair with "Just Works" or ask for the classic
+/// `1234`/`0000` PIN, so both are attempted.
+pub fn pair(address: &str) -> Result<(), String> {
+    if parse_mac(&format!("{PORT_PREFIX}{address}")).is_none() {
+        return Err("Invalid Bluetooth address".to_string());
+    }
+
+    let mut last_error = String::new();
+    for pin in ["1234", "0000"] {
+        match pair_with_pin(address, pin) {
+            Ok(()) => {
+                let _ = trust(address);
+                return Ok(());
+            }
+            Err(error) => last_error = error,
+        }
+    }
+
+    Err(last_error)
+}
+
+fn pair_with_pin(address: &str, pin: &str) -> Result<(), String> {
+    let mut session = PtySession::spawn()?;
+
+    session.write_line("agent KeyboardDisplay")?;
+    session.write_line("default-agent")?;
+    session.write_line(&format!("pair {address}"))?;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(25);
+    let mut output = String::new();
+    let mut answered_pin = false;
+
+    while std::time::Instant::now() < deadline {
+        if let Some(exit) = session.child_exited() {
+            return Err(describe_failure(&output, exit));
+        }
+
+        let Some(chunk) = session.read_chunk(Duration::from_millis(200))? else {
+            continue;
+        };
+        output.push_str(&chunk);
+        let lower = output.to_ascii_lowercase();
+
+        if lower.contains("pairing successful") {
+            return Ok(());
+        }
+        if lower.contains("failed to pair")
+            || lower.contains("authentication failed")
+            || lower.contains("authentication rejected")
+        {
+            return Err(describe_failure(&output, None));
+        }
+
+        if !answered_pin
+            && (lower.contains("pin code")
+                || lower.contains("passkey")
+                || lower.contains("passcode"))
+        {
+            session.write_line(pin)?;
+            answered_pin = true;
+        }
+    }
+
+    Err(format!("Pairing {address} timed out"))
+}
+
+/// Mark a device as trusted so BlueZ reconnects automatically.
+pub fn trust(address: &str) -> Result<(), String> {
+    run_bluetoothctl(&["trust", address])
+}
+
+/// Disconnect and remove a pairing.
+pub fn forget(address: &str) -> Result<(), String> {
+    let _ = run_bluetoothctl(&["disconnect", address]);
+    run_bluetoothctl(&["remove", address])
+}
+
+fn run_bluetoothctl(arguments: &[&str]) -> Result<(), String> {
+    let output = Command::new("bluetoothctl")
+        .args(arguments)
+        .output()
+        .map_err(|error| format!("Could not run bluetoothctl: {error}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(describe_failure(
+            &String::from_utf8_lossy(&output.stdout),
+            output.status.code(),
+        ))
+    }
+}
+
+fn describe_failure(output: &str, exit_code: Option<i32>) -> String {
+    let cleaned = strip_ansi(output);
+    let reason = cleaned
+        .lines()
+        .map(str::trim)
+        .rfind(|line| {
+            let lower = line.to_ascii_lowercase();
+            lower.contains("failed")
+                || lower.contains("error")
+                || lower.contains("not available")
+                || lower.contains("rejected")
+        })
+        .map(str::to_string);
+
+    match reason {
+        Some(reason) => reason,
+        None => match exit_code {
+            Some(code) => format!("bluetoothctl exited with status {code}"),
+            None => "Pairing failed".to_string(),
+        },
+    }
+}
+
+fn strip_ansi(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(character) = chars.next() {
+        if character == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            output.push(character);
+        }
+    }
+
+    output
+}
+
+/// `bluetoothctl` needs a terminal to behave like an agent (prompt for PINs,
+/// flush its output); a plain pipe buffers and hides the prompts.
+struct PtySession {
+    child: std::process::Child,
+    master: RawFd,
+}
+
+impl PtySession {
+    fn spawn() -> Result<Self, String> {
+        unsafe {
+            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            if master < 0 {
+                return Err(format!(
+                    "Could not allocate a pseudo terminal: {}",
+                    io::Error::last_os_error()
+                ));
+            }
+
+            if libc::grantpt(master) != 0 || libc::unlockpt(master) != 0 {
+                let error = io::Error::last_os_error();
+                libc::close(master);
+                return Err(format!("Could not prepare pseudo terminal: {error}"));
+            }
+
+            let name = libc::ptsname(master);
+            if name.is_null() {
+                let error = io::Error::last_os_error();
+                libc::close(master);
+                return Err(format!("Could not resolve pseudo terminal: {error}"));
+            }
+
+            let slave = libc::open(name, libc::O_RDWR | libc::O_NOCTTY);
+            if slave < 0 {
+                let error = io::Error::last_os_error();
+                libc::close(master);
+                return Err(format!("Could not open pseudo terminal: {error}"));
+            }
+
+            let mut termios: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(slave, &mut termios) == 0 {
+                libc::cfmakeraw(&mut termios);
+                libc::tcsetattr(slave, libc::TCSANOW, &termios);
+            }
+
+            let child = Command::new("bluetoothctl")
+                .stdin(Stdio::from_raw_fd(slave))
+                .stdout(Stdio::from_raw_fd(libc::dup(slave)))
+                .stderr(Stdio::from_raw_fd(libc::dup(slave)))
+                .spawn()
+                .map_err(|error| format!("Could not run bluetoothctl: {error}"))?;
+
+            Ok(Self { child, master })
+        }
+    }
+
+    fn write_line(&self, line: &str) -> Result<(), String> {
+        let bytes = format!("{line}\n");
+        let mut written = 0;
+        while written < bytes.len() {
+            let result = unsafe {
+                libc::write(
+                    self.master,
+                    bytes[written..].as_ptr() as *const libc::c_void,
+                    bytes.len() - written,
+                )
+            };
+            if result < 0 {
+                return Err(format!(
+                    "Could not talk to bluetoothctl: {}",
+                    io::Error::last_os_error()
+                ));
+            }
+            written += result as usize;
+        }
+        Ok(())
+    }
+
+    fn read_chunk(&self, timeout: Duration) -> Result<Option<String>, String> {
+        let mut poll_fd = libc::pollfd {
+            fd: self.master,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+
+        let ready = unsafe {
+            libc::poll(
+                &mut poll_fd,
+                1,
+                timeout.as_millis().min(i32::MAX as u128) as libc::c_int,
+            )
+        };
+
+        if ready <= 0 {
+            return Ok(None);
+        }
+
+        let mut buffer = [0u8; 1024];
+        let read = unsafe {
+            libc::read(
+                self.master,
+                buffer.as_mut_ptr() as *mut libc::c_void,
+                buffer.len(),
+            )
+        };
+
+        if read <= 0 {
+            return Ok(None);
+        }
+
+        Ok(Some(
+            String::from_utf8_lossy(&buffer[..read as usize]).into_owned(),
+        ))
+    }
+
+    fn child_exited(&mut self) -> Option<Option<i32>> {
+        match self.child.try_wait() {
+            Ok(Some(status)) => Some(status.code()),
+            Ok(None) => None,
+            Err(_) => Some(None),
+        }
+    }
+}
+
+impl Drop for PtySession {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = unsafe { libc::close(self.master) };
+    }
 }
 
 /// Open an RFCOMM connection to `port` (`BT:AA:BB:CC:DD:EE:FF`).
@@ -215,7 +585,10 @@ fn mac_bytes(mac: &str) -> io::Result<[u8; 6]> {
     let mut bytes = [0u8; 6];
     let octets: Vec<&str> = mac.split(':').collect();
     if octets.len() != 6 {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid MAC address"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid MAC address",
+        ));
     }
     for (index, octet) in octets.iter().enumerate() {
         bytes[index] = u8::from_str_radix(octet, 16)
@@ -231,7 +604,13 @@ fn open_rfcomm(mac: &str, channel: u8) -> io::Result<RawFd> {
         rc_channel: channel,
     };
 
-    let fd = unsafe { libc::socket(AF_BLUETOOTH, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, BTPROTO_RFCOMM) };
+    let fd = unsafe {
+        libc::socket(
+            AF_BLUETOOTH,
+            libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
+            BTPROTO_RFCOMM,
+        )
+    };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -276,7 +655,10 @@ fn open_rfcomm(mac: &str, channel: u8) -> io::Result<RawFd> {
 
         if ready <= 0 {
             let _ = unsafe { libc::close(fd) };
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "Bluetooth connect timed out"));
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Bluetooth connect timed out",
+            ));
         }
 
         let mut socket_error: libc::c_int = 0;
@@ -361,7 +743,8 @@ impl Drop for BluetoothSerialPort {
 impl Read for BluetoothSerialPort {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
-            let read = unsafe { libc::recv(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
+            let read =
+                unsafe { libc::recv(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
             if read >= 0 {
                 return Ok(read as usize);
             }
@@ -554,7 +937,10 @@ impl SerialPort for BluetoothSerialPort {
         Ok(())
     }
 
-    fn set_flow_control(&mut self, _flow_control: serialport::FlowControl) -> serialport::Result<()> {
+    fn set_flow_control(
+        &mut self,
+        _flow_control: serialport::FlowControl,
+    ) -> serialport::Result<()> {
         Ok(())
     }
 

@@ -50,13 +50,17 @@ pub enum Error {
     InvalidProtocol(u8),
     #[error("Received invalid or mangled response to command via serial connection")]
     InvalidResponse,
-    #[error("Received response explicitly containing 'NODATA' thus no meaningful data was received")]
+    #[error(
+        "Received response explicitly containing 'NODATA' thus no meaningful data was received"
+    )]
     NoData,
     #[error("No positive response received after sending OBD request to clear DTCs. Expected positive response '44' but got '{0}'")]
     DTCClearFailed(String),
 
-    #[error("Error occured during I/O operation via serial communication. Error details (if any): {0}")]
-    AdapterReadWriteError(String)
+    #[error(
+        "Error occured during I/O operation via serial communication. Error details (if any): {0}"
+    )]
+    AdapterReadWriteError(String),
 }
 
 pub enum Service {
@@ -687,14 +691,11 @@ impl OBD {
         };
 
         port.clear(serialport::ClearBuffer::All)
-            .map_err(|error| 
-                match error.kind() {
-                    NoDevice => Error::NoConnection,
-                    Io(_) => Error::AdapterReadWriteError(error.description),
-                    _ => Error::AdapterReadWriteError("unknown i/o error".to_string()),
-                } 
-        )?;
-
+            .map_err(|error| match error.kind() {
+                NoDevice => Error::NoConnection,
+                Io(_) => Error::AdapterReadWriteError(error.description),
+                _ => Error::AdapterReadWriteError("unknown i/o error".to_string()),
+            })?;
 
         let mut buffer = [0u8; 1];
         let mut response = String::new();

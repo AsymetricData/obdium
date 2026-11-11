@@ -122,6 +122,92 @@ pub fn listen_send_ports(window: &Arc<WebviewWindow>) {
     });
 }
 
+/// Bluetooth adapter discovery, pairing and removal, driven from the UI.
+///
+/// Scanning runs on its own thread: discovery takes several seconds and must
+/// not block the webview event loop.
+pub fn listen_bluetooth(window: &Arc<WebviewWindow>) {
+    let window_arc = Arc::new(window.clone());
+
+    let scan_window = Arc::clone(&window_arc);
+    window_arc.listen("bluetooth-scan", move |_| {
+        let window = Arc::clone(&scan_window);
+        std::thread::spawn(move || {
+            #[cfg(target_os = "linux")]
+            let payload = {
+                if obdium::bluetooth::is_available() {
+                    serde_json::json!({
+                        "supported": true,
+                        "devices": obdium::bluetooth::scan(Duration::from_secs(8)),
+                    })
+                } else {
+                    serde_json::json!({ "supported": false, "devices": [] })
+                }
+            };
+
+            #[cfg(not(target_os = "linux"))]
+            let payload = serde_json::json!({ "supported": false, "devices": [] });
+
+            let _ = window.emit("update-bluetooth-devices", payload);
+            let _ = window.emit("update-serial-ports", OBD::get_open_serial_ports());
+        });
+    });
+
+    let pair_window = Arc::clone(&window_arc);
+    window_arc.listen("bluetooth-pair", move |event| {
+        let address = event.payload().trim().to_string();
+        let window = Arc::clone(&pair_window);
+
+        std::thread::spawn(move || {
+            #[cfg(target_os = "linux")]
+            let result = obdium::bluetooth::pair(&address);
+            #[cfg(not(target_os = "linux"))]
+            let result: Result<(), String> =
+                Err("Bluetooth is only supported on Linux".to_string());
+
+            let _ = window.emit(
+                "bluetooth-operation-result",
+                serde_json::json!({
+                    "action": "pair",
+                    "address": address,
+                    "ok": result.is_ok(),
+                    "message": result.err().unwrap_or_default(),
+                }),
+            );
+
+            let _ = window.emit("update-serial-ports", OBD::get_open_serial_ports());
+            let _ = window.emit("bluetooth-scan", ());
+        });
+    });
+
+    let forget_window = Arc::clone(&window_arc);
+    window_arc.listen("bluetooth-forget", move |event| {
+        let address = event.payload().trim().to_string();
+        let window = Arc::clone(&forget_window);
+
+        std::thread::spawn(move || {
+            #[cfg(target_os = "linux")]
+            let result = obdium::bluetooth::forget(&address);
+            #[cfg(not(target_os = "linux"))]
+            let result: Result<(), String> =
+                Err("Bluetooth is only supported on Linux".to_string());
+
+            let _ = window.emit(
+                "bluetooth-operation-result",
+                serde_json::json!({
+                    "action": "forget",
+                    "address": address,
+                    "ok": result.is_ok(),
+                    "message": result.err().unwrap_or_default(),
+                }),
+            );
+
+            let _ = window.emit("update-serial-ports", OBD::get_open_serial_ports());
+            let _ = window.emit("bluetooth-scan", ());
+        });
+    });
+}
+
 // TODO: This is an eye sore.
 pub fn listen_decode_vin(window: &WebviewWindow) {
     let window_arc = Arc::new(window.clone());

@@ -1,0 +1,143 @@
+.bluetooth-panel {
+  width: 100%;
+  max-width: 900px;
+  margin-bottom: 14px;
+}
+
+.bluetooth-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bluetooth-panel-header label {
+  font-size: 18px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #f3f3f2;
+  margin-left: 1.5px;
+}
+
+.bluetooth-scan {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: #151515;
+  border: none;
+  border-radius: 4px;
+  color: #f3f3f2;
+  font-family: "Montserrat", sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
+.bluetooth-scan:hover {
+  background-color: #1d1d1d;
+}
+
+.bluetooth-scan:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.bluetooth-status {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: #575757;
+  margin: 6px 0 8px 1.5px;
+}
+
+.bluetooth-devices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bluetooth-device {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background-color: #151515;
+  border-radius: 4px;
+  padding: 8px 12px;
+}
+
+.bluetooth-device-info {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bluetooth-device-name {
+  color: #f7f3ff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.bluetooth-device-address {
+  color: #49454f;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.bluetooth-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.bluetooth-badge.paired {
+  background-color: #173f2a;
+  color: #5ee08a;
+}
+
+.bluetooth-badge.unresolved {
+  background-color: #3a2f14;
+  color: #e0b85e;
+}
+
+.bluetooth-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.bluetooth-action {
+  background-color: #1d1d1d;
+  border: none;
+  border-radius: 3px;
+  color: #f3f3f2;
+  font-family: "Montserrat", sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+
+.bluetooth-action:hover {
+  background-color: #262626;
+}
+
+.bluetooth-action.use {
+  background-color: #205c37;
+}
+
+.bluetooth-action.use:hover {
+  background-color: #276f43;
+}
+
+.bluetooth-action:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

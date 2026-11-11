@@ -93,13 +93,16 @@ For a full user manual, view the docs [here.](https://provrb.github.io/obdium/)
 
 ### Bluetooth Classic (SPP) adapters (Linux)
 
-Bluetooth Classic adapters that expose a Serial Port Profile show up directly in the port list as `BT:AA:BB:CC:DD:EE:FF` — no `rfcomm bind`, no root, no extra tools:
+Bluetooth Classic adapters can be scanned, paired and used directly from the **Connection** panel — no `rfcomm bind`, no root, no extra tools:
 
-1. Pair the adapter with your OS (Bluetooth settings or `bluetoothctl`).
-2. Open the **Connection** panel and click refresh.
-3. Select the `BT:<MAC>` entry and connect. The RFCOMM channel is detected automatically.
+1. Power the adapter and plug it into the car.
+2. In the **Connection** panel, press **SCAN** in the *Bluetooth Classic (SPP) adapters* section.
+3. Pick your adapter and press **PAIR** (the classic `1234`/`0000` PIN is tried automatically).
+4. Press **USE** on the paired adapter, then **CONNECT**.
 
-Only adapters advertising the SPP service UUID (`00001101-...`) are listed. BLE-only (GATT) adapters are not supported yet, and on macOS/Windows Classic adapters still have to be exposed as a regular serial device by the OS.
+Paired adapters are listed as `BT:AA:BB:CC:DD:EE:FF` and opened over RFCOMM, with the channel detected automatically. **FORGET** removes the pairing.
+
+Only adapters advertising the SPP service UUID (`00001101-...`) are supported. BLE-only (GATT) adapters are not, and on macOS/Windows Classic adapters still have to be exposed as a regular serial device by the OS.
 
 ### Understanding each feature
 

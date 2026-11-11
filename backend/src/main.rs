@@ -5,7 +5,8 @@ mod bridge;
 mod stats;
 
 use bridge::events::{
-    do_send_connection_status, listen_connect_elm, listen_decode_vin, listen_send_ports,
+    do_send_connection_status, listen_bluetooth, listen_connect_elm, listen_decode_vin,
+    listen_send_ports,
 };
 use obdium::{
     vin::{vpic_db_path, APP_DATA_DIR},
@@ -165,6 +166,7 @@ fn main() {
 
                 listen_decode_vin(&window_arc);
                 listen_send_ports(&window_arc);
+                listen_bluetooth(&window_arc);
                 listen_track_custom_pid(&window_arc);
                 listen_connect_elm(&window_arc);
 

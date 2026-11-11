@@ -1,3 +1,4 @@
+#[cfg(target_os = "linux")]
 pub mod bluetooth;
 mod cmd;
 pub mod dicts;

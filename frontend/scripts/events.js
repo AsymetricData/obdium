@@ -370,6 +370,172 @@ listen("update-serial-ports", (event) => {
   refreshIcon.classList.remove("spinning");
 });
 
+// Bluetooth Classic (SPP) adapter management
+const bluetoothDevices = document.getElementById("bluetooth-devices");
+const bluetoothStatus = document.getElementById("bluetooth-status");
+const scanBluetoothButton = document.getElementById("scan-bluetooth");
+
+let bluetoothBusy = false;
+
+function setBluetoothStatus(text) {
+  bluetoothStatus.textContent = text;
+}
+
+function setBluetoothButtonsDisabled(disabled) {
+  bluetoothDevices.querySelectorAll("button").forEach((button) => {
+    button.disabled = disabled;
+  });
+}
+
+function selectBluetoothPort(address) {
+  const port = `BT:${address}`;
+  const existing = serialPortMenu.querySelector(`li[data-value="${port}"]`);
+
+  if (!existing) {
+    const option = document.createElement("li");
+    option.textContent = port;
+    option.dataset.value = port;
+    serialPortMenu.appendChild(option);
+  }
+
+  serialPortSelected.textContent = port;
+  serialPortSelected.dataset.value = port;
+  baudRateSelected.textContent = "38400";
+}
+
+function bluetoothOperation(action, address) {
+  if (bluetoothBusy) return;
+
+  bluetoothBusy = true;
+  setBluetoothButtonsDisabled(true);
+  setBluetoothStatus(
+    action === "pair"
+      ? `PAIRING ${address}… THIS CAN TAKE A FEW SECONDS`
+      : `REMOVING ${address}…`,
+  );
+
+  emit(action === "pair" ? "bluetooth-pair" : "bluetooth-forget", address);
+}
+
+function renderBluetoothDevices(payload) {
+  const devices = payload && payload.devices ? payload.devices : [];
+
+  bluetoothDevices.innerHTML = "";
+  scanBluetoothButton.disabled = false;
+
+  if (!payload || !payload.supported) {
+    scanBluetoothButton.disabled = true;
+    setBluetoothStatus("BLUETOOTH MANAGEMENT IS ONLY AVAILABLE ON LINUX");
+    return;
+  }
+
+  if (devices.length === 0) {
+    setBluetoothStatus("NO CLASSIC (SPP) ADAPTER FOUND — POWER IT ON, THEN SCAN AGAIN");
+    return;
+  }
+
+  setBluetoothStatus(`${devices.length} ADAPTER(S) FOUND`);
+
+  for (const device of devices) {
+    const row = document.createElement("div");
+    row.className = "bluetooth-device";
+    row.innerHTML = `
+      <div class="bluetooth-device-info">
+        <span class="bluetooth-device-name"></span>
+        <span class="bluetooth-device-address"></span>
+        ${device.paired ? '<span class="bluetooth-badge paired">PAIRED</span>' : ""}
+        ${device.spp ? "" : '<span class="bluetooth-badge unresolved">SPP UNKNOWN</span>'}
+      </div>
+      <div class="bluetooth-actions"></div>
+    `;
+
+    row.querySelector(".bluetooth-device-name").textContent = device.name;
+    row.querySelector(".bluetooth-device-address").textContent = device.address;
+
+    const actions = row.querySelector(".bluetooth-actions");
+
+    if (device.paired) {
+      const useButton = document.createElement("button");
+      useButton.className = "bluetooth-action use";
+      useButton.textContent = "USE";
+      useButton.addEventListener("click", () => {
+        selectBluetoothPort(device.address);
+        addNotification(
+          "BLUETOOTH",
+          `${device.name} selected as port BT:${device.address}. Press CONNECT.`,
+        );
+      });
+      actions.appendChild(useButton);
+
+      const forgetButton = document.createElement("button");
+      forgetButton.className = "bluetooth-action";
+      forgetButton.textContent = "FORGET";
+      forgetButton.addEventListener("click", () =>
+        bluetoothOperation("forget", device.address),
+      );
+      actions.appendChild(forgetButton);
+    } else {
+      const pairButton = document.createElement("button");
+      pairButton.className = "bluetooth-action use";
+      pairButton.textContent = "PAIR";
+      pairButton.addEventListener("click", () =>
+        bluetoothOperation("pair", device.address),
+      );
+      actions.appendChild(pairButton);
+    }
+
+    bluetoothDevices.appendChild(row);
+  }
+}
+
+listen("update-bluetooth-devices", (event) => {
+  bluetoothBusy = false;
+  renderBluetoothDevices(event.payload);
+});
+
+listen("bluetooth-operation-result", (event) => {
+  const { action, address, ok, message } = event.payload;
+  bluetoothBusy = false;
+  setBluetoothButtonsDisabled(false);
+
+  if (ok) {
+    addNotification(
+      "BLUETOOTH",
+      action === "pair"
+        ? `Paired with ${address}. It is now available as BT:${address}.`
+        : `Removed ${address}.`,
+    );
+
+    if (action === "pair") {
+      selectBluetoothPort(address);
+    }
+  } else {
+    addNotification(
+      "BLUETOOTH",
+      `${action === "pair" ? "Pairing" : "Removal"} failed: ${message || "unknown error"}`,
+    );
+    setBluetoothStatus("OPERATION FAILED — CHECK THE ADAPTER AND TRY AGAIN");
+  }
+});
+
+scanBluetoothButton.addEventListener("click", () => {
+  if (bluetoothBusy) return;
+
+  bluetoothBusy = true;
+  scanBluetoothButton.disabled = true;
+  setBluetoothStatus("SCANNING… THIS TAKES ABOUT 10 SECONDS");
+  emit("bluetooth-scan");
+
+  // Do not leave the UI stuck if the backend never answers.
+  setTimeout(() => {
+    if (bluetoothBusy) {
+      bluetoothBusy = false;
+      scanBluetoothButton.disabled = false;
+      setBluetoothStatus("SCAN TIMED OUT — TRY AGAIN");
+    }
+  }, 20000);
+});
+
 const readinessTests = document.getElementById("readiness-tests-list");
 listen("update-readiness-tests", (event) => {
   readinessTests.innerHTML = ``;
